@@ -24,7 +24,7 @@ SRWebSocket *_webSocket;
     else if (_webSocket.readyState == SR_OPEN)
         [self performSegueWithIdentifier:@"settings" sender:nil];
     else if (_webSocket.readyState != SR_CONNECTING)
-        [self webSocket:_webSocket didFailWithError:[NSNull null]];
+        [self webSocket:_webSocket didFailWithError:nil];
 }
 
 - (void)_reconnect;
@@ -135,13 +135,24 @@ SRWebSocket *_webSocket;
     NSInteger code = [data[@"code"] intValue];
     switch (code) {
         case 2: // player exited // {"code":2, "playerID":playerID}
-            [self.scene removePlayer:data[@"playerID"]];
+            if ([data[@"playerID"] isEqualToString:self.scene.playerID]) {
+                [self.scene abortGame];
+                self.scene.statusText.text = @"Game over";
+                self.scene.active = NO;
+                UIAlertView *alert = [NSClassFromString(@"_UIAlertManager") performSelector:@selector(topMostAlert)];
+                if (!alert && !self.presentedViewController) {
+                    alert = [[UIAlertView alloc] initWithTitle:@"Game Over" message:@"Play again?" delegate:((UIView *)self.view).window.rootViewController cancelButtonTitle:@"NO" otherButtonTitles:@"YES", nil];
+                    [alert show];
+                }
+            }
+            else
+                [self.scene removePlayer:data[@"playerID"]];
             break;
         case 3: {// signal to send taps
-            NSMutableArray *data = [NSMutableArray arrayWithCapacity:self.scene.taps.count];
+            NSMutableArray *tapData = [NSMutableArray arrayWithCapacity:self.scene.taps.count];
             for (NSString *key in self.scene.taps)
-                [data addObject:[NSString stringWithFormat:@"%@ %@", key, self.scene.taps[key]]];
-            NSString *msg = [NSString stringWithFormat:@"{\"code\": 3, \"data\": \"%@\"}", [data componentsJoinedByString:@" "]];
+                [tapData addObject:[NSString stringWithFormat:@"%@ %@", key, self.scene.taps[key]]];
+            NSString *msg = [NSString stringWithFormat:@"{\"code\": 3, \"marker\": %@, \"data\": \"%@\"}", data[@"marker"], [tapData componentsJoinedByString:@" "]];
             [self sendMessage:msg];
             [self.scene waitMode:YES];
             break;
@@ -164,7 +175,7 @@ SRWebSocket *_webSocket;
                     cell.gridX = [cellData[i*3] intValue];
                     cell.gridY = [cellData[i*3+1] intValue];
                     cell.zPosition = cell.life = [cellData[i*3+2] intValue];
-                    NSString *key = [NSString stringWithFormat:@"%ld %ld", cell.gridX, cell.gridY];
+                    NSString *key = [NSString stringWithFormat:@"%d %d", cell.gridX, cell.gridY];
                     player.cells[key] = cell;
                     [self.scene addCell:cell :key];
                 }
@@ -195,7 +206,7 @@ SRWebSocket *_webSocket;
     NSDictionary *joinData = @{
                                @"code": @"1",
                                @"playerID": self.scene.playerID,
-                               @"color": [NSString stringWithFormat:@"%lu", self.scene.color]
+                               @"color": [NSString stringWithFormat:@"%u", self.scene.color]
                                };
     NSData *d = [NSJSONSerialization dataWithJSONObject:joinData options:0 error:nil];
     NSString *s = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];

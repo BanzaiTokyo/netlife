@@ -11,10 +11,9 @@
 
 const NSInteger gridW = 7;
 const NSInteger gridH = 12;
-const NSInteger maxLife = 30;
+const NSInteger maxLife = 3;
 CGSize cellSize;
 SKShapeNode *grid;
-NSInteger maxMyCells = 0;
 
 @implementation Player
 @end
@@ -40,7 +39,6 @@ NSInteger maxMyCells = 0;
 
 @end
 
-SKLabelNode *myLabel;
 @implementation MyScene
 
 -(id)initWithSize:(CGSize)size {
@@ -49,12 +47,12 @@ SKLabelNode *myLabel;
         self.mainLayer = [SKNode node];
         [self addChild:self.mainLayer];
         
-        myLabel = [SKLabelNode labelNodeWithFontNamed:@"Chalkduster"];
-        myLabel.text = @"Hello, World!";
-        myLabel.fontSize = 10;
-        myLabel.position = CGPointMake(CGRectGetMidX(self.frame), self.frame.size.height*0.9);
+        self.statusText = [SKLabelNode labelNodeWithFontNamed:@"Chalkduster"];
+        self.statusText.text = @"Hello, World!";
+        self.statusText.fontSize = 10;
+        self.statusText.position = CGPointMake(CGRectGetMidX(self.frame), self.frame.size.height*0.9);
         
-        [self addChild:myLabel];
+        [self addChild:self.statusText];
         
         grid = [SKShapeNode node];
         CGMutablePathRef path = CGPathCreateMutable();
@@ -89,6 +87,7 @@ SKLabelNode *myLabel;
     [self.mainLayer removeAllChildren];
     self.attackers = [NSMutableDictionary dictionary];
     self.taps = [NSMutableDictionary dictionary];
+    self.players = [NSMutableDictionary dictionary];
     self.active = NO;
 }
 
@@ -139,71 +138,35 @@ SKLabelNode *myLabel;
     CGPoint location = [touch locationInNode:self];
     NSInteger cellX = floor(location.x / cellSize.width);
     NSInteger cellY = floor(location.y / cellSize.height);
-    location = CGPointMake(cellX * cellSize.width, cellY * cellSize.height);
-    NSArray *check = [self.mainLayer nodesAtPoint:location];
-    for (SKNode *n in check)
-        if ([n isKindOfClass:[Cell class]]) {
-            Cell *c = (Cell *)n;
-            if ([c.player.playerID isEqualToString: self.playerID] && c.life < maxLife) { //tapped on an own cell
-                c.zPosition =  ++c.life;
-                NSString *key = [NSString stringWithFormat:@"%d %d", c.gridX, c.gridY];
-                [self checkAttackerAtPos:key :c.gridX :c.gridY];
-                self.taps[key] = [NSNumber numberWithInteger:c.life];
-                return;
+    NSString *key = [NSString stringWithFormat:@"%d %d", cellX, cellY];
+    NSInteger n = -1;
+    if (!self.taps[key]) //look for own cell or neighbours
+        for (int x=-1; x<2; x++)
+            for (int y=-1; y<2; y++) {
+                Player *p = (Player *)self.players[self.playerID];
+                if (!p.cells[[NSString stringWithFormat:@"%d %d", (cellX + x), (cellY + y)]]) continue;
+                //found a neighbour own cell, OK to start count taps
+                n = 0;
+                self.taps[key] = [NSNumber numberWithInteger:0];
+                break;
             }
-        }
-    
-    for (int x=-1; x<2; x++)
-        for (int y=-1; y<2; y++) {
-            if (!x && !y) continue;
-            NSString *key = [NSString stringWithFormat:@"%d %d", (cellX + x), (cellY + y)];
-            Player *p = (Player *)self.players[self.playerID];
-            if (!p.cells[key]) continue;
-            //found a neighbour own cell, OK to place a new on tapped coordinates
-            Cell *c = [Cell node];
-            c.player = p;
-            c.zPosition = c.life = maxLife/2;
-            c.gridX = cellX;  c.gridY = cellY;
-            key = [NSString stringWithFormat:@"%d %d", cellX, cellY];
-            p.cells[key] = c;
-            [self addCell:c :key];
-            self.taps[key] = [NSNumber numberWithInteger:c.life];
-            return;
-        }
-}
-
--(void)sendTap:(Cell *)c {
-    NSString *msg = [NSString stringWithFormat:@"{\"code\":3, \"tap\":\"%d %d\"}", c.gridX, c.gridY];
-    [(ViewController *)((UIView *)self.view).window.rootViewController sendMessage:msg];
+    else
+        n = [self.taps[key] integerValue];
+    if (n >= 0)
+        self.taps[key] = [NSNumber numberWithInteger:n+1];
 }
 
 -(void)waitMode:(BOOL)wait {
-    maxMyCells = 0;
-    for (Cell *c in [((Player *)self.players[self.playerID]).cells allValues])
-        maxMyCells = MAX(maxMyCells, c.life);
     if (wait) {
         self.userInteractionEnabled = NO;
         self.active = NO;
-        myLabel.text = @"Waiting for other players...";
-        if (maxMyCells != 1)
-            return;
-        [self abortGame];
-        myLabel.text = @"Game over";
-        self.active = NO;
-        UIAlertView *alert = [NSClassFromString(@"_UIAlertManager") performSelector:@selector(topMostAlert)];
-        if (!alert) {
-            alert = [[UIAlertView alloc] initWithTitle:@"Game Over" message:@"Play again?" delegate:((UIView *)self.view).window.rootViewController cancelButtonTitle:@"NO" otherButtonTitles:@"YES", nil];
-            [alert show];
-        }
+        self.statusText.text = @"Waiting for other players...";
     }
     else {
         self.userInteractionEnabled = YES;
         self.active = self.players[self.playerID] != nil;
         self.taps = [NSMutableDictionary dictionary];
-        if (maxMyCells)
-            myLabel.text = [NSString stringWithFormat:@"Last cell dies in %d steps", maxMyCells];
-        else
-            myLabel.text = @"";
+        self.statusText.text = @"";
         //[self performSelector:@selector(tickAction) withObject:nil afterDelay:1.0];
     }
 }

@@ -11,6 +11,7 @@ import json
 import tornado.websocket
 import random
 import datetime
+import time
 
 from tornado.options import define, options, parse_command_line
 
@@ -21,12 +22,16 @@ class NetLife(tornado.websocket.WebSocketHandler):
     cells = {}
     gridW = 7
     gridH = 12
-    maxLife = 30
+    maxLife = 3
+    captureTaps = 3
     stepTime = 3 #movie time, seconds
+    collectTime = 2 #collecting results max. time
     sendqueue = {}
     gameState = 0 #0 - waiting 3 sec for movie, 1 - collecting results
     playersChanged = True
-    timeout = None
+    stepTimeout = None
+    collectTimeout = None
+    marker = 0
     
     def open(self):
         self.id = str(uuid.uuid4())
@@ -52,7 +57,7 @@ class NetLife(tornado.websocket.WebSocketHandler):
           self.dataReceived = True
           self.isNew = True
           NetLife.playersChanged = True
-          if not NetLife.timeout: #this is the first player
+          if not NetLife.stepTimeout: #this is the first player
             NetLife.gameStep()
           else:
             print 'has timeout, waiting'
@@ -60,16 +65,21 @@ class NetLife(tornado.websocket.WebSocketHandler):
           self.playerExited()
         elif message['code'] == 3: #cell tapped
           if NetLife.gameState == 1:
-             print 'cells from {0}'.format(self.playerID)
-             data = message['data'].split(' ')
-             n = len(data)
-             if n % 3 == 0:
-                for i in range(n//3):
-                  cellX = data[i*3]
-                  cellY = data[i*3+1]
-                  life = data[i*3+2]
-                  coord = cellX + ' ' + cellY
-                  self.cells[coord] = {'gridX':int(cellX), 'gridY':int(cellY), 'life': min(int(life), NetLife.maxLife)}
+             print 'cells from {0}: {1}'.format(self.playerID, message['data'])
+             if message['marker'] == NetLife.marker:
+                data = message['data'].split(' ')
+                n = len(data)
+                if n % 3 == 0:
+                   for i in range(n//3):
+                     cellX = data[i*3]
+                     cellY = data[i*3+1]
+                     life = int(data[i*3+2])
+                     coord = cellX + ' ' + cellY
+                     if coord in self.cells:
+                       life += self.cells[coord]['life']
+                     self.cells[coord] = {'gridX':int(cellX), 'gridY':int(cellY), 'life': -life}
+             else:
+               print 'wrong marker from {0}: {1} instead of {2}'.format(self.playerID, message['marker'], NetLife.marker)
              self.dataReceived = True
              NetLife.checkReceivedData()
         else:
@@ -84,12 +94,10 @@ class NetLife(tornado.websocket.WebSocketHandler):
     def playerExited(self):
         self.cells = {}
         NetLife.playersChanged = True
-        if NetLife.gameState == 1:
-          NetLife.checkReceivedData()
-        else:
-          message = {'code':2, 'playerID':self.playerID}
-          print 'playerExited:', message
-          self.broadcast(message)
+        message = {'code':2, 'playerID':self.playerID}
+        print 'playerExited:', message
+        self.broadcast(message, selfToo=True)
+        NetLife.checkReceivedData()
     
     def broadcast(self, message, activeOnly=False, comment='', selfToo=False):
         message = json.dumps(message)
@@ -116,7 +124,7 @@ class NetLife(tornado.websocket.WebSocketHandler):
             if b1: break
           if not b1: b = False
         #end of while
-        cell = {'gridX':startX, 'gridY':startY, 'life':NetLife.maxLife//2}
+        cell = {'gridX':startX, 'gridY':startY, 'life':NetLife.maxLife}
         self.cells['{0} {1}'.format(startX, startY)] = cell
 
     @classmethod
@@ -124,9 +132,8 @@ class NetLife(tornado.websocket.WebSocketHandler):
         players = []
         for p in NetLife.clients.itervalues():
           if not p.active or not len(p.cells):
-             print 'inactive or no cells',p
              continue
-          print 'cells:',len(p.cells)
+          print p.playerID, 'cells:',len(p.cells)
           s = []
           for c in p.cells:
             s = s + ['{0} {1} {2}'.format(p.cells[c]['gridX'], p.cells[c]['gridY'], p.cells[c]['life'])]
@@ -137,14 +144,44 @@ class NetLife(tornado.websocket.WebSocketHandler):
     @classmethod
     def gameStep(cls): #send field data
         sender = None
-        for p in NetLife.clients.itervalues():
+        globalCells = {}
+        for p in NetLife.clients.itervalues(): # iterate through new taps
           if not p.active or not len(p.cells) or p.isNew: continue
-          s = []
+          for c in p.cells:
+            if c in globalCells:
+              if p.cells[c]['life'] < 0: #check my taps
+                if globalCells[c]['life'] < 0: #someone tapped too
+                  if globalCells[c]['life'] - p.cells[c]['life'] >= NetLife.captureTaps: #I tapped more
+                    print '{0} tapped {1} more at {2} than {3} {4}'.format(p.playerID, p.cells[c]['life'], c, globalCells[c]['owner'], globalCells[c]['life'])
+                    globalCells[c] = {'life': p.cells[c]['life'], 'owner': p.playerID}
+                  elif globalCells[c]['life'] == p.cells[c]['life']:
+                    print 'draw at {0}'.format(c)
+                    globalCells[c]['draw'] = True
+                elif p.cells[c]['life'] <= -NetLife.captureTaps: #nobody tapped, I tapped enough to capture
+                  print '{0} became {2} my {1}'.format(c, p.playerID, p.cells[c]['life'])
+                  globalCells[c] = {'life': p.cells[c]['life'], 'owner': p.playerID}
+              else:
+                if not c in globalCells or globalCells[c]['life'] > NetLife.captureTaps: #someone tried to capture my cell, but made not enough taps
+                  print '{0} already {2} mine {1}'.format(c, p.playerID, p.cells[c]['life'])
+                  globalCells[c] = {'life': p.cells[c]['life'], 'owner': p.playerID}
+            else:
+              print '{0} fill {2} mine {1}'.format(c, p.playerID, p.cells[c]['life'])
+              globalCells[c] = {'life': p.cells[c]['life'], 'owner': p.playerID}
+        print globalCells
+        for p in NetLife.clients.itervalues(): # iterate through the cells
+          if not p.active or not len(p.cells) or p.isNew: continue
           cells = {}
           for c in p.cells:
-            if p.cells[c]['life'] > 1:
-              cells[c] = p.cells[c]
-              cells[c]['life'] -= 1
+            if globalCells[c]['owner'] == p.playerID:
+               if p.cells[c]['life'] > 1: #existing, untapped cell, simply decrement its life
+                 p.cells[c]['life'] -= 1
+               elif p.cells[c]['life'] < 0 and not 'draw' in globalCells[c]: #tapped, no conflict refresh the cell
+                 p.cells[c]['life'] = NetLife.maxLife
+               else:
+                 continue
+               cells[c] = p.cells[c]
+            else:
+              print '{0} lost {1}'.format(p.playerID, c)
           p.cells = cells
           if not len(p.cells):
             print 'Life: {0} lose'.format(p.playerID)
@@ -152,43 +189,55 @@ class NetLife(tornado.websocket.WebSocketHandler):
             p.active = False
           else:
             sender = p
-        for p in NetLife.clients.itervalues():
+            
+        for p in NetLife.clients.itervalues(): #new players
           if p.active and p.isNew:
              NetLife.playersChanged = True
              p.generateStartingPosition()
              p.isNew = False
              sender = p
+             
         if sender:
            message = {'code':4, 'players':NetLife.playersList()}
-           sender.broadcast(message, comment='tick', selfToo=True)
+           sender.broadcast(message, selfToo=True)
            NetLife.gameState = 0
-           NetLife.timeout = tornado.ioloop.IOLoop.instance().add_timeout(datetime.timedelta(seconds=NetLife.stepTime), NetLife.collectResults)
+           NetLife.stepTimeout = tornado.ioloop.IOLoop.instance().add_timeout(datetime.timedelta(seconds=NetLife.stepTime), NetLife.collectResults)
         else:
-           NetLife.timeout = None
+           NetLife.stepTimeout = None
     
     @classmethod
     def collectResults(cls):
         for p in NetLife.clients.itervalues():
           if not p.active or not len(p.cells) or p.isNew: continue
           p.dataReceived = False
-          p.write_message('{"code": 3}')
+          NetLife.marker = int(time.time())
+          p.write_message('{"code": 3, "marker": '+str(NetLife.marker)+'}')
         NetLife.gameState = 1
+        NetLife.collectTimeout = tornado.ioloop.IOLoop.instance().add_timeout(datetime.timedelta(seconds=NetLife.collectTime), NetLife.cancelResultsWaiting)
+
+    @classmethod
+    def cancelResultsWaiting(cls):
+        for p in NetLife.clients.itervalues():
+          if not p.active or not len(p.cells) or p.isNew: continue
+          p.dataReceived = True
+        NetLife.checkReceivedData()
 
     @classmethod
     def checkReceivedData(cls):
         if NetLife.gameState == 0: return
         print 'checking data'
-        b = True
+        everybodyReady = True
         hasActive = False
         for p in NetLife.clients.itervalues():
           if p.active:
             hasActive = True
-            b = b and p.dataReceived
+            everybodyReady = everybodyReady and p.dataReceived
         if not hasActive:
-          print 'remove timeout'
-          NetLife.timeout = None
-        if b:
+          print 'no players, stop ticker'
+          NetLife.stepTimeout = None
+        if everybodyReady:
           print 'all ok, next step'
+          tornado.ioloop.IOLoop.instance().remove_timeout(NetLife.collectTimeout)
           NetLife.gameState = 0
           NetLife.gameStep()
         else:
@@ -197,8 +246,6 @@ class NetLife(tornado.websocket.WebSocketHandler):
 #=============== websocket ==================
 
 def main():
-    global global_message_buffer, app, chatlog, bot
-
     logging.getLogger("tornado.access").setLevel(logging.WARNING)
     app = tornado.web.Application(
         [
@@ -207,7 +254,7 @@ def main():
     )
     app.listen(options.port)
 
-    NetLife.timeout = tornado.ioloop.IOLoop.instance().add_timeout(datetime.timedelta(seconds=NetLife.stepTime), NetLife.gameStep)
+    NetLife.stepTimeout = tornado.ioloop.IOLoop.instance().add_timeout(datetime.timedelta(seconds=NetLife.stepTime), NetLife.gameStep)
     
     tornado.ioloop.IOLoop.instance().start()
 

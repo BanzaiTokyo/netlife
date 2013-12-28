@@ -9,6 +9,7 @@
 #import <UIKit/UIKit.h>
 #import <SpriteKit/SpriteKit.h>
 #import "SocketRocket/SRWebSocket.h"
+#pragma GCC diagnostic ignored "-Wundeclared-selector"
 #import "MyScene.h"
 
 @interface ViewController : UIViewController <UIAlertViewDelegate, SRWebSocketDelegate>

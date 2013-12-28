@@ -31,6 +31,7 @@ extern const NSInteger maxLife;
 @property (nonatomic, strong) NSMutableDictionary *attackers;
 @property (nonatomic, strong) NSMutableDictionary *taps;
 @property (nonatomic, strong) SKNode *mainLayer;
+@property (nonatomic, strong) SKLabelNode *statusText;
 -(void)abortGame;
 -(void)addCell:(Cell *)cell :(NSString *)key;
 -(void)removePlayer:(NSString *)playerID;
